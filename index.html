@@ -26,7 +26,6 @@
         
         .header-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: wrap; }
         
-        /* URL Input Bar */
         .url-input-bar { display: flex; align-items: center; gap: 6px; background: #0a0a0a; border: 1px solid #1a1a1a; border-radius: 25px; padding: 2px 6px 2px 12px; flex: 1; min-width: 200px; max-width: 350px; }
         .url-input-bar input { background: transparent; border: none; color: #ffffff; font-size: 0.7rem; outline: none; flex: 1; padding: 6px 0; }
         .url-input-bar input::placeholder { color: #444; }
@@ -76,7 +75,6 @@
         .video-container.radio-mode { display: none; }
         video { width: 100%; height: 100%; object-fit: contain; background: #000000; }
         
-        /* YouTube iframe embed */
         .youtube-iframe { width: 100%; height: 100%; border: none; display: none; }
         .youtube-iframe.active { display: block; }
         video.youtube-mode { display: none; }
@@ -177,16 +175,16 @@
         <div class="player-area">
             <div class="video-container" id="videoContainer">
                 <video id="videoPlayer" controls playsinline style="width:100%; height:100%;"></video>
-                <iframe id="youtubeIframe" class="youtube-iframe" src="" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>
+                <iframe id="youtubeIframe" class="youtube-iframe" src="" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen></iframe>
                 <div id="loadingOverlay" class="loading" style="display:none;">Loading...</div>
             </div>
             <div class="radio-visualizer" id="radioVisualizer"><div class="radio-icon">🎵</div><div class="equalizer"><div class="equalizer-bar"></div><div class="equalizer-bar"></div><div class="equalizer-bar"></div><div class="equalizer-bar"></div><div class="equalizer-bar"></div><div class="equalizer-bar"></div></div><div class="radio-station-name" id="radioStationName">Select a station</div><div class="radio-category" id="radioCategory"></div></div>
             <div class="controls">
                 <button class="control-btn nav-btn" id="prevChannelBtn" title="Previous Channel">⏮</button>
-                <button class="control-btn" id="playBtn">▶</button>
-                <button class="control-btn" id="pauseBtn">⏸</button>
-                <button class="control-btn" id="stopBtn">⏹</button>
+                <button class="control-btn" id="playPauseBtn" title="Play/Pause">▶</button>
+                <button class="control-btn" id="stopBtn" title="Stop">⏹</button>
                 <button class="control-btn nav-btn" id="nextChannelBtn" title="Next Channel">⏭</button>
+                <button class="control-btn" id="pipBtn" title="Picture-in-Picture">⛶</button>
                 <div class="volume-control"><span>🔊</span><input type="range" id="volumeSlider" min="0" max="100" value="70"></div>
             </div>
         </div>
@@ -212,6 +210,7 @@
     let checkingChannels = new Set();
     let isYoutubeMode = false;
     let currentYoutubeUrl = '';
+    let isPipMode = false;
     
     // DOM elements
     const channelListDiv = document.getElementById('channelList');
@@ -229,11 +228,11 @@
     const radioVisualizer = document.getElementById('radioVisualizer');
     const radioStationName = document.getElementById('radioStationName');
     const radioCategory = document.getElementById('radioCategory');
-    const playBtn = document.getElementById('playBtn');
-    const pauseBtn = document.getElementById('pauseBtn');
+    const playPauseBtn = document.getElementById('playPauseBtn');
     const stopBtn = document.getElementById('stopBtn');
     const prevChannelBtn = document.getElementById('prevChannelBtn');
     const nextChannelBtn = document.getElementById('nextChannelBtn');
+    const pipBtn = document.getElementById('pipBtn');
     const volumeSlider = document.getElementById('volumeSlider');
     const loadingOverlay = document.getElementById('loadingOverlay');
     const youtubeIframe = document.getElementById('youtubeIframe');
@@ -287,19 +286,16 @@
         radioCategory.textContent = channel.category;
     }
     
-    // Check if URL is YouTube
     function isYouTubeUrl(url) {
         return url && (url.includes('youtube.com/watch') || url.includes('youtu.be/') || url.includes('youtube.com/live'));
     }
     
-    // Extract YouTube video ID
     function getYoutubeId(url) {
         const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
         const match = url.match(regex);
         return match ? match[1] : null;
     }
     
-    // Play YouTube video in iframe
     function playYoutube(url, channelName = 'YouTube Live') {
         const videoId = getYoutubeId(url);
         if (!videoId) {
@@ -310,31 +306,26 @@
         isYoutubeMode = true;
         currentYoutubeUrl = url;
         
-        // Hide video player, show iframe
         videoPlayerEl.style.display = 'none';
         youtubeIframe.style.display = 'block';
-        youtubeIframe.src = `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0`;
+        youtubeIframe.src = `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0&enablejsapi=1`;
         
-        // Update info
         radioStationName.textContent = channelName;
         radioCategory.textContent = 'YouTube Live';
         showToast(`Playing: ${channelName}`, false);
+        updatePlayPauseButton(true);
         
-        // Update current channel tracking
         if (currentChannel) {
             currentChannel.isYoutube = true;
         }
     }
     
-    // Play IPTV/standard stream
     function playStream(url, channelName) {
-        // Reset YouTube mode
         isYoutubeMode = false;
         youtubeIframe.style.display = 'none';
         youtubeIframe.src = '';
         videoPlayerEl.style.display = 'block';
         
-        // Check if it's a YouTube URL
         if (isYouTubeUrl(url)) {
             playYoutube(url, channelName);
             return;
@@ -352,7 +343,7 @@
             hls = new Hls({ enableWorker: true, lowLatencyMode: true, maxBufferLength: 30, manifestLoadingTimeOut: 10000 });
             hls.loadSource(url);
             hls.attachMedia(video);
-            hls.on(Hls.Events.MANIFEST_PARSED, () => { showLoading(false); video.play().catch(() => {}); });
+            hls.on(Hls.Events.MANIFEST_PARSED, () => { showLoading(false); video.play().catch(() => {}); updatePlayPauseButton(true); });
             hls.on(Hls.Events.ERROR, (event, data) => { 
                 showLoading(false); 
                 if (data.fatal) {
@@ -365,7 +356,7 @@
             });
         } else {
             video.src = url;
-            video.addEventListener('canplay', () => { showLoading(false); video.play().catch(() => {}); });
+            video.addEventListener('canplay', () => { showLoading(false); video.play().catch(() => {}); updatePlayPauseButton(true); });
             video.onerror = () => { 
                 showLoading(false); 
                 showToast('Cannot play this stream', true);
@@ -378,7 +369,6 @@
         setTimeout(() => { if (loadingOverlay.style.display !== 'none') showLoading(false); }, 15000);
     }
     
-    // Navigate to previous/next channel
     function navigateChannel(direction) {
         if (filteredChannels.length === 0) return;
         
@@ -391,7 +381,6 @@
             currentChannelIndex = newIndex;
             selectChannel(channel);
         } else {
-            // Skip offline/checking channels
             let attempts = 0;
             let tempIndex = newIndex;
             while (attempts < filteredChannels.length) {
@@ -408,7 +397,6 @@
         }
     }
     
-    // Custom URL play handler
     function playCustomUrl() {
         const url = customUrlInput.value.trim();
         if (!url) {
@@ -416,13 +404,11 @@
             return;
         }
         
-        // Check if it's a YouTube URL
         if (isYouTubeUrl(url)) {
             playYoutube(url, 'Custom YouTube');
             return;
         }
         
-        // Play as IPTV stream
         const fakeChannel = {
             name: 'Custom Stream',
             url: url,
@@ -435,8 +421,75 @@
         playStream(url, 'Custom Stream');
     }
     
+    function togglePlayPause() {
+        if (isYoutubeMode) {
+            const videoId = getYoutubeId(currentYoutubeUrl);
+            if (videoId) {
+                const isPlaying = playPauseBtn.textContent === '⏸';
+                if (isPlaying) {
+                    youtubeIframe.src = `https://www.youtube.com/embed/${videoId}?autoplay=0&rel=0&enablejsapi=1`;
+                    updatePlayPauseButton(false);
+                } else {
+                    youtubeIframe.src = `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0&enablejsapi=1`;
+                    updatePlayPauseButton(true);
+                }
+            }
+        } else if (videoPlayer) {
+            if (videoPlayer.paused) {
+                videoPlayer.play().catch(() => {});
+                updatePlayPauseButton(true);
+            } else {
+                videoPlayer.pause();
+                updatePlayPauseButton(false);
+            }
+        }
+    }
+    
+    function updatePlayPauseButton(isPlaying) {
+        playPauseBtn.textContent = isPlaying ? '⏸' : '▶';
+        playPauseBtn.title = isPlaying ? 'Pause' : 'Play';
+    }
+    
+    function togglePip() {
+        if (isYoutubeMode) {
+            // YouTube iframe PiP - request fullscreen then PiP
+            if (youtubeIframe.requestPictureInPicture) {
+                youtubeIframe.requestPictureInPicture().catch(() => {
+                    showToast('PiP not supported for YouTube', true);
+                });
+            } else {
+                showToast('PiP not supported in this browser', true);
+            }
+            return;
+        }
+        
+        if (videoPlayer && videoPlayer.requestPictureInPicture) {
+            if (document.pictureInPictureElement) {
+                document.exitPictureInPicture().catch(() => {});
+                pipBtn.style.color = '#ffffff';
+            } else {
+                videoPlayer.requestPictureInPicture().catch(() => {
+                    showToast('PiP not supported', true);
+                });
+                pipBtn.style.color = '#7aa9ff';
+            }
+        } else {
+            showToast('PiP not supported in this browser', true);
+        }
+    }
+    
+    // PiP events
+    document.addEventListener('enterpictureinpicture', () => {
+        pipBtn.style.color = '#7aa9ff';
+        isPipMode = true;
+    });
+    
+    document.addEventListener('leavepictureinpicture', () => {
+        pipBtn.style.color = '#ffffff';
+        isPipMode = false;
+    });
+    
     function testStreamReal(url) {
-        // Skip testing for YouTube URLs
         if (isYouTubeUrl(url)) return true;
         
         const controller = new AbortController();
@@ -495,7 +548,6 @@
         let onlineCount = 0;
         
         channelArray.forEach(ch => {
-            // Skip testing for YouTube URLs - mark as online immediately
             if (isYouTubeUrl(ch.url)) {
                 onlineCount++;
                 tested++;
@@ -651,7 +703,6 @@
             return true;
         });
         
-        // Reset current channel index if current channel not in filtered list
         if (currentChannel) {
             const newIndex = filteredChannels.findIndex(ch => ch.url === currentChannel.url);
             currentChannelIndex = newIndex;
@@ -749,35 +800,8 @@
     
     prevChannelBtn.addEventListener('click', () => navigateChannel(-1));
     nextChannelBtn.addEventListener('click', () => navigateChannel(1));
-    
-    playBtn.addEventListener('click', () => { 
-        if (isYoutubeMode) {
-            // For YouTube, just reload the iframe
-            const videoId = getYoutubeId(currentYoutubeUrl);
-            if (videoId) {
-                youtubeIframe.src = `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0`;
-            }
-        } else if (videoPlayer && videoPlayer.src) {
-            videoPlayer.play().catch(() => {}); 
-        } else if (currentChannel && !offlineChannels.has(currentChannel.url)) {
-            playStream(currentChannel.url, currentChannel.name); 
-        } else if (channels.length > 0) { 
-            const firstOnline = channels.find(ch => !offlineChannels.has(ch.url)); 
-            if (firstOnline) selectChannel(firstOnline); 
-        } else showToast('Load first', true); 
-    });
-    
-    pauseBtn.addEventListener('click', () => { 
-        if (isYoutubeMode) {
-            // Pause YouTube by removing and re-adding iframe without autoplay
-            const videoId = getYoutubeId(currentYoutubeUrl);
-            if (videoId) {
-                youtubeIframe.src = `https://www.youtube.com/embed/${videoId}?autoplay=0&rel=0`;
-            }
-        } else if (videoPlayer) {
-            videoPlayer.pause(); 
-        }
-    });
+    playPauseBtn.addEventListener('click', togglePlayPause);
+    pipBtn.addEventListener('click', togglePip);
     
     stopBtn.addEventListener('click', () => { 
         destroyHls(); 
@@ -791,6 +815,11 @@
             videoPlayer.removeAttribute('src');
             videoPlayer.load();
         }
+        updatePlayPauseButton(false);
+        if (document.pictureInPictureElement) {
+            document.exitPictureInPicture().catch(() => {});
+            pipBtn.style.color = '#ffffff';
+        }
     });
     
     volumeSlider.addEventListener('input', () => { if (videoPlayer) videoPlayer.volume = volumeSlider.value / 100; });
@@ -800,12 +829,16 @@
         applyFilters();
     });
     
+    // Update play/pause button state on video events
+    videoPlayerEl.addEventListener('play', () => updatePlayPauseButton(true));
+    videoPlayerEl.addEventListener('pause', () => updatePlayPauseButton(false));
+    videoPlayerEl.addEventListener('ended', () => updatePlayPauseButton(false));
+    
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
         if (e.code === 'Space' && document.activeElement !== searchInput && document.activeElement !== customUrlInput) {
             e.preventDefault();
-            if (videoPlayer.paused) videoPlayer.play().catch(() => {});
-            else videoPlayer.pause();
+            togglePlayPause();
         }
         if (e.key === 'ArrowLeft' && document.activeElement !== searchInput && document.activeElement !== customUrlInput) {
             e.preventDefault();
@@ -814,6 +847,10 @@
         if (e.key === 'ArrowRight' && document.activeElement !== searchInput && document.activeElement !== customUrlInput) {
             e.preventDefault();
             navigateChannel(1);
+        }
+        if (e.key === 'f' || e.key === 'F') {
+            e.preventDefault();
+            togglePip();
         }
     });
     
