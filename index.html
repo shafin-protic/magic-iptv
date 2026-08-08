@@ -314,45 +314,82 @@
         return match ? match[1] : null;
     }
     
+    // FIXED: Properly clean up before playing YouTube
     function playYoutube(url, channelName = 'YouTube Live') {
         const videoId = getYoutubeId(url);
         if (!videoId) {
             showToast('Invalid YouTube URL', true);
             return;
         }
+        
+        // CRITICAL FIX: Stop and destroy any existing stream
+        destroyHls();
+        if (videoPlayer) {
+            videoPlayer.pause();
+            videoPlayer.removeAttribute('src');
+            videoPlayer.load();
+        }
+        
         isYoutubeMode = true;
         currentYoutubeUrl = url;
+        
+        // Hide video player, show iframe
         videoPlayerEl.style.display = 'none';
         youtubeIframe.style.display = 'block';
         youtubeIframe.src = `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0&enablejsapi=1`;
+        
+        // Update UI
         radioStationName.textContent = channelName;
         radioCategory.textContent = 'YouTube Live';
         showToast(`Playing: ${channelName}`, false);
         updatePlayPauseButton(true);
-        if (currentChannel) currentChannel.isYoutube = true;
+        
+        if (currentChannel) {
+            currentChannel.isYoutube = true;
+        }
     }
     
+    // FIXED: Properly clean up before switching to stream
     function playStream(url, channelName) {
-        isYoutubeMode = false;
+        // CRITICAL FIX: Properly clean up before switching
+        destroyHls();
+        if (videoPlayer) {
+            videoPlayer.pause();
+            videoPlayer.removeAttribute('src');
+            videoPlayer.load();
+        }
+        
+        // Hide YouTube iframe
         youtubeIframe.style.display = 'none';
         youtubeIframe.src = '';
         videoPlayerEl.style.display = 'block';
+        isYoutubeMode = false;
+        
+        // Check if it's a YouTube URL
         if (isYouTubeUrl(url)) {
             playYoutube(url, channelName);
             return;
         }
+        
         showLoading(true);
-        destroyHls();
         const video = videoPlayerEl;
-        if (currentMode === 'radio') { video.style.display = 'none'; updateRadioDisplay(currentChannel); } 
-        else { video.style.display = 'block'; }
-        video.pause(); video.removeAttribute('src'); video.load();
+        if (currentMode === 'radio') { 
+            video.style.display = 'none'; 
+            updateRadioDisplay(currentChannel); 
+        } else { 
+            video.style.display = 'block'; 
+        }
+        
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+        
         const isHLS = url.includes('.m3u8');
         if (isHLS && Hls.isSupported()) {
             hls = new Hls({ 
                 enableWorker: true, 
                 lowLatencyMode: true, 
-                maxBufferLength: 15,  // Reduced buffer for memory
+                maxBufferLength: 15,
                 manifestLoadingTimeOut: 5000,
                 levelLoadingTimeOut: 5000,
                 fragLoadingTimeOut: 10000
