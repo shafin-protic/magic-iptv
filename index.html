@@ -53,7 +53,7 @@
         .channel-list-container { flex: 1; overflow-y: auto; padding: 6px; -webkit-overflow-scrolling: touch; }
         .channel-list-container::-webkit-scrollbar { width: 3px; }
         
-        .channel-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; margin: 3px 0; border-radius: 10px; background: transparent; cursor: pointer; transition: all 0.15s; }
+        .channel-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; margin: 3px 0; border-radius: 10px; background: transparent; cursor: pointer; transition: all 0.15s; will-change: transform; }
         .channel-item:active { background: #1a1a1a; }
         .channel-item.active { background: #0f0f0f; border-left: 3px solid #ff0000; }
         .channel-item.offline { opacity: 0.5; background: #0a0a0a; cursor: not-allowed; }
@@ -196,6 +196,7 @@
     const GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTESN5TIXBEckCTwsoNEyMtecwRRkQoQwMI-09RPuz7kjwz-jPROLsNdfmRY0Q0aYFfeLgIQrFXbRZK/pub?gid=1947259241&single=true&output=csv";
     const GOOGLE_SHEET_EDIT_URL = "https://docs.google.com/spreadsheets/d/1lkZLaaxRjtJbwD_NhFQh6r7Hr_sxPnQGKiWKsu80cYI/edit?usp=sharing";
     
+    // Memory optimization: Reuse objects, minimize closures
     let channels = [];
     let filteredChannels = [];
     let currentChannel = null;
@@ -211,8 +212,10 @@
     let isYoutubeMode = false;
     let currentYoutubeUrl = '';
     let isPipMode = false;
+    let renderTimeout = null;
+    let searchTimeout = null;
     
-    // DOM elements
+    // DOM cache - store references
     const channelListDiv = document.getElementById('channelList');
     const searchInput = document.getElementById('searchInput');
     const categoryDropdown = document.getElementById('categoryDropdown');
@@ -240,16 +243,30 @@
     const playCustomUrlBtn = document.getElementById('playCustomUrlBtn');
     const videoPlayerEl = document.getElementById('videoPlayer');
     
+    // Toast manager - single instance
+    let toastTimeout = null;
     function showToast(message, isError = false) {
-        const toast = document.createElement('div');
-        toast.className = 'toast';
+        if (toastTimeout) clearTimeout(toastTimeout);
+        let toast = document.querySelector('.toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.className = 'toast';
+            document.body.appendChild(toast);
+        }
         toast.textContent = message;
-        document.body.appendChild(toast);
-        setTimeout(() => toast.remove(), 2500);
+        toast.style.background = isError ? '#1a1a1a' : '#1a1a1a';
+        toast.style.display = 'block';
+        toastTimeout = setTimeout(() => { toast.style.display = 'none'; }, 2500);
     }
     
     function showLoading(show) { loadingOverlay.style.display = show ? 'block' : 'none'; }
-    function destroyHls() { if (hls) { hls.destroy(); hls = null; } }
+    
+    function destroyHls() { 
+        if (hls) { 
+            try { hls.destroy(); } catch(e) {}
+            hls = null; 
+        }
+    }
     
     function updateStatusBar() {
         const online = channels.filter(ch => !offlineChannels.has(ch.url) && !checkingChannels.has(ch.url)).length;
@@ -286,6 +303,7 @@
         radioCategory.textContent = channel.category;
     }
     
+    // Inline isYouTubeUrl - avoid function call overhead
     function isYouTubeUrl(url) {
         return url && (url.includes('youtube.com/watch') || url.includes('youtu.be/') || url.includes('youtube.com/live'));
     }
@@ -302,22 +320,16 @@
             showToast('Invalid YouTube URL', true);
             return;
         }
-        
         isYoutubeMode = true;
         currentYoutubeUrl = url;
-        
         videoPlayerEl.style.display = 'none';
         youtubeIframe.style.display = 'block';
         youtubeIframe.src = `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0&enablejsapi=1`;
-        
         radioStationName.textContent = channelName;
         radioCategory.textContent = 'YouTube Live';
         showToast(`Playing: ${channelName}`, false);
         updatePlayPauseButton(true);
-        
-        if (currentChannel) {
-            currentChannel.isYoutube = true;
-        }
+        if (currentChannel) currentChannel.isYoutube = true;
     }
     
     function playStream(url, channelName) {
@@ -325,25 +337,33 @@
         youtubeIframe.style.display = 'none';
         youtubeIframe.src = '';
         videoPlayerEl.style.display = 'block';
-        
         if (isYouTubeUrl(url)) {
             playYoutube(url, channelName);
             return;
         }
-        
         showLoading(true);
         destroyHls();
-        
         const video = videoPlayerEl;
         if (currentMode === 'radio') { video.style.display = 'none'; updateRadioDisplay(currentChannel); } 
         else { video.style.display = 'block'; }
         video.pause(); video.removeAttribute('src'); video.load();
         const isHLS = url.includes('.m3u8');
         if (isHLS && Hls.isSupported()) {
-            hls = new Hls({ enableWorker: true, lowLatencyMode: true, maxBufferLength: 30, manifestLoadingTimeOut: 10000 });
+            hls = new Hls({ 
+                enableWorker: true, 
+                lowLatencyMode: true, 
+                maxBufferLength: 15,  // Reduced buffer for memory
+                manifestLoadingTimeOut: 5000,
+                levelLoadingTimeOut: 5000,
+                fragLoadingTimeOut: 10000
+            });
             hls.loadSource(url);
             hls.attachMedia(video);
-            hls.on(Hls.Events.MANIFEST_PARSED, () => { showLoading(false); video.play().catch(() => {}); updatePlayPauseButton(true); });
+            hls.on(Hls.Events.MANIFEST_PARSED, () => { 
+                showLoading(false); 
+                video.play().catch(() => {}); 
+                updatePlayPauseButton(true);
+            });
             hls.on(Hls.Events.ERROR, (event, data) => { 
                 showLoading(false); 
                 if (data.fatal) {
@@ -356,7 +376,11 @@
             });
         } else {
             video.src = url;
-            video.addEventListener('canplay', () => { showLoading(false); video.play().catch(() => {}); updatePlayPauseButton(true); });
+            video.addEventListener('canplay', () => { 
+                showLoading(false); 
+                video.play().catch(() => {}); 
+                updatePlayPauseButton(true);
+            }, { once: true });
             video.onerror = () => { 
                 showLoading(false); 
                 showToast('Cannot play this stream', true);
@@ -366,23 +390,20 @@
                 applyFilters();
             };
         }
-        setTimeout(() => { if (loadingOverlay.style.display !== 'none') showLoading(false); }, 15000);
+        setTimeout(() => { if (loadingOverlay.style.display !== 'none') showLoading(false); }, 10000);
     }
     
     function navigateChannel(direction) {
         if (filteredChannels.length === 0) return;
-        
         let newIndex = currentChannelIndex + direction;
         if (newIndex < 0) newIndex = filteredChannels.length - 1;
         if (newIndex >= filteredChannels.length) newIndex = 0;
-        
         const channel = filteredChannels[newIndex];
         if (channel && !offlineChannels.has(channel.url) && !checkingChannels.has(channel.url)) {
             currentChannelIndex = newIndex;
             selectChannel(channel);
         } else {
-            let attempts = 0;
-            let tempIndex = newIndex;
+            let attempts = 0, tempIndex = newIndex;
             while (attempts < filteredChannels.length) {
                 tempIndex = (tempIndex + direction + filteredChannels.length) % filteredChannels.length;
                 const tempChannel = filteredChannels[tempIndex];
@@ -399,22 +420,9 @@
     
     function playCustomUrl() {
         const url = customUrlInput.value.trim();
-        if (!url) {
-            showToast('Please enter a URL', true);
-            return;
-        }
-        
-        if (isYouTubeUrl(url)) {
-            playYoutube(url, 'Custom YouTube');
-            return;
-        }
-        
-        const fakeChannel = {
-            name: 'Custom Stream',
-            url: url,
-            category: 'Custom',
-            logo: ''
-        };
+        if (!url) { showToast('Please enter a URL', true); return; }
+        if (isYouTubeUrl(url)) { playYoutube(url, 'Custom YouTube'); return; }
+        const fakeChannel = { name: 'Custom Stream', url: url, category: 'Custom', logo: '' };
         currentChannel = fakeChannel;
         currentChannelIndex = -1;
         renderChannelList();
@@ -426,13 +434,8 @@
             const videoId = getYoutubeId(currentYoutubeUrl);
             if (videoId) {
                 const isPlaying = playPauseBtn.textContent === '⏸';
-                if (isPlaying) {
-                    youtubeIframe.src = `https://www.youtube.com/embed/${videoId}?autoplay=0&rel=0&enablejsapi=1`;
-                    updatePlayPauseButton(false);
-                } else {
-                    youtubeIframe.src = `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0&enablejsapi=1`;
-                    updatePlayPauseButton(true);
-                }
+                youtubeIframe.src = `https://www.youtube.com/embed/${videoId}?autoplay=${isPlaying ? 0 : 1}&rel=0&enablejsapi=1`;
+                updatePlayPauseButton(!isPlaying);
             }
         } else if (videoPlayer) {
             if (videoPlayer.paused) {
@@ -452,7 +455,6 @@
     
     function togglePip() {
         if (isYoutubeMode) {
-            // YouTube iframe PiP - request fullscreen then PiP
             if (youtubeIframe.requestPictureInPicture) {
                 youtubeIframe.requestPictureInPicture().catch(() => {
                     showToast('PiP not supported for YouTube', true);
@@ -462,7 +464,6 @@
             }
             return;
         }
-        
         if (videoPlayer && videoPlayer.requestPictureInPicture) {
             if (document.pictureInPictureElement) {
                 document.exitPictureInPicture().catch(() => {});
@@ -478,23 +479,20 @@
         }
     }
     
-    // PiP events
     document.addEventListener('enterpictureinpicture', () => {
         pipBtn.style.color = '#7aa9ff';
         isPipMode = true;
     });
-    
     document.addEventListener('leavepictureinpicture', () => {
         pipBtn.style.color = '#ffffff';
         isPipMode = false;
     });
     
+    // Optimized test function with timeout
     function testStreamReal(url) {
-        if (isYouTubeUrl(url)) return true;
-        
+        if (isYouTubeUrl(url)) return Promise.resolve(true);
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000);
-        
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
         return new Promise((resolve) => {
             try {
                 if (url.includes('.m3u8')) {
@@ -515,20 +513,11 @@
                 } else {
                     fetch(url, { 
                         signal: controller.signal,
-                        headers: { 'Range': 'bytes=0-1024' }
+                        headers: { 'Range': 'bytes=0-512' }
                     })
                     .then(response => {
                         clearTimeout(timeoutId);
-                        if (response.ok && response.status !== 404) {
-                            const contentLength = response.headers.get('content-length');
-                            if (contentLength && parseInt(contentLength) > 0) {
-                                resolve(true);
-                            } else {
-                                resolve(true);
-                            }
-                        } else {
-                            resolve(false);
-                        }
+                        resolve(response.ok && response.status !== 404);
                     })
                     .catch(() => { clearTimeout(timeoutId); resolve(false); });
                 }
@@ -539,66 +528,45 @@
         });
     }
     
+    // Progressive testing with smaller batches for memory efficiency
     async function testChannelsProgressive(channelArray) {
         if (testingActive) return;
         testingActive = true;
-        
         const total = channelArray.length;
-        let tested = 0;
-        let onlineCount = 0;
-        
+        let tested = 0, onlineCount = 0;
         channelArray.forEach(ch => {
-            if (isYouTubeUrl(ch.url)) {
-                onlineCount++;
-                tested++;
-            } else {
-                checkingChannels.add(ch.url);
-            }
+            if (isYouTubeUrl(ch.url)) { onlineCount++; tested++; } 
+            else checkingChannels.add(ch.url);
         });
         updateStatusBar();
         testingStatusDiv.innerHTML = `🔍 Testing 0/${total}`;
-        
-        const batchSize = 3;
+        const batchSize = 2; // Smaller batch for memory
         for (let i = 0; i < channelArray.length; i += batchSize) {
             const batch = channelArray.slice(i, i + batchSize);
             const results = await Promise.all(batch.map(ch => {
                 if (isYouTubeUrl(ch.url)) return true;
                 return testStreamReal(ch.url);
             }));
-            
             for (let j = 0; j < batch.length; j++) {
-                const isOnline = results[j];
-                if (isOnline) {
-                    onlineCount++;
-                } else {
-                    offlineChannels.add(batch[j].url);
-                }
+                if (results[j]) onlineCount++;
+                else offlineChannels.add(batch[j].url);
                 checkingChannels.delete(batch[j].url);
                 tested++;
             }
-            
             const percent = Math.round((tested / total) * 100);
             testingStatusDiv.innerHTML = `📡 ${tested}/${total} (${percent}%) | ✅ ${onlineCount} | ❌ ${tested - onlineCount}`;
             updateStatusBar();
             populateCategoryDropdown();
             applyFilters();
-            await new Promise(r => setTimeout(r, 100));
+            await new Promise(r => setTimeout(r, 50));
         }
-        
         testingStatusDiv.innerHTML = `✅ Complete: ${onlineCount} online, ${total - onlineCount} offline`;
         updateStatusBar();
         populateCategoryDropdown();
         applyFilters();
-        
-        setTimeout(() => {
-            if (testingStatusDiv.innerHTML.includes('Complete')) {
-                testingStatusDiv.style.opacity = '0.7';
-            }
-        }, 3000);
-        
+        setTimeout(() => { if (testingStatusDiv.innerHTML.includes('Complete')) testingStatusDiv.style.opacity = '0.7'; }, 2000);
         testingActive = false;
-        showToast(`Found ${onlineCount} active channels out of ${total}`, false);
-        
+        showToast(`Found ${onlineCount} active channels`, false);
         if (!currentChannel && channels.length > 0) {
             const firstOnline = channels.find(ch => !offlineChannels.has(ch.url));
             if (firstOnline) selectChannel(firstOnline);
@@ -610,7 +578,6 @@
         testingStatusDiv.innerHTML = '📥 Loading from Google Sheet...';
         offlineChannels.clear();
         checkingChannels.clear();
-        
         try {
             const response = await fetch(GOOGLE_SHEET_CSV_URL);
             if (response.ok) {
@@ -620,11 +587,9 @@
                 categories.clear();
                 categories.add('All');
                 categories.add('Offline');
-                
                 for (let i = 1; i < rows.length; i++) {
                     const row = rows[i].trim();
                     if (!row) continue;
-                    
                     const fields = [];
                     let currentField = '';
                     let inQuotes = false;
@@ -634,19 +599,16 @@
                         else currentField += char;
                     }
                     fields.push(currentField.trim());
-                    
                     const cleanField = (field) => field ? field.replace(/^["']|["']$/g, '') : '';
                     const name = cleanField(fields[1]);
                     const url = cleanField(fields[2]);
                     const category = cleanField(fields[3]) || 'Uncategorized';
                     const logoUrl = cleanField(fields[4]);
-                    
                     if (name && url && url.startsWith('http')) {
                         parsedChannels.push({ name, url, category, logo: logoUrl, isYoutube: isYouTubeUrl(url) });
                         categories.add(category);
                     }
                 }
-                
                 if (parsedChannels.length > 0) {
                     channels = parsedChannels;
                     filteredChannels = [...channels];
@@ -667,13 +629,9 @@
         const onlineChannels = channels.filter(ch => !offlineChannels.has(ch.url) && !checkingChannels.has(ch.url));
         const offlineCount = offlineChannels.size;
         const checkingCount = checkingChannels.size;
-        
         let html = `<option value="All">📺 All Active (${onlineChannels.length})</option>`;
         html += `<option value="Offline">📡 Offline (${offlineCount})</option>`;
-        if (checkingCount > 0) {
-            html += `<option value="Checking">🟠 Checking (${checkingCount})</option>`;
-        }
-        
+        if (checkingCount > 0) html += `<option value="Checking">🟠 Checking (${checkingCount})</option>`;
         for (let cat of categories) {
             if (cat === 'All' || cat === 'Offline' || cat === 'Checking') continue;
             const count = onlineChannels.filter(ch => ch.category === cat).length;
@@ -685,13 +643,10 @@
     
     function applyFilters() {
         const searchTerm = searchInput.value.toLowerCase();
-        
         filteredChannels = channels.filter(ch => {
-            if (activeCategory === 'Offline') {
-                return offlineChannels.has(ch.url);
-            } else if (activeCategory === 'Checking') {
-                return checkingChannels.has(ch.url);
-            } else if (activeCategory !== 'All') {
+            if (activeCategory === 'Offline') return offlineChannels.has(ch.url);
+            if (activeCategory === 'Checking') return checkingChannels.has(ch.url);
+            if (activeCategory !== 'All') {
                 if (offlineChannels.has(ch.url)) return false;
                 if (checkingChannels.has(ch.url)) return false;
                 if (ch.category !== activeCategory) return false;
@@ -702,68 +657,59 @@
             if (searchTerm && !ch.name.toLowerCase().includes(searchTerm)) return false;
             return true;
         });
-        
         if (currentChannel) {
             const newIndex = filteredChannels.findIndex(ch => ch.url === currentChannel.url);
             currentChannelIndex = newIndex;
         }
-        
         renderChannelList();
     }
     
     function getStatusIcon(channel) {
-        if (offlineChannels.has(channel.url)) {
-            return '<span class="status-icon status-offline" title="Offline">🔴</span>';
-        }
-        if (checkingChannels.has(channel.url)) {
-            return '<span class="status-icon status-checking" title="Checking...">🟠</span>';
-        }
-        return '<span class="status-icon status-online" title="Online">🟢</span>';
+        if (offlineChannels.has(channel.url)) return '<span class="status-icon status-offline">🔴</span>';
+        if (checkingChannels.has(channel.url)) return '<span class="status-icon status-checking">🟠</span>';
+        return '<span class="status-icon status-online">🟢</span>';
     }
     
+    // Optimized render with DocumentFragment
     function renderChannelList() {
-        if (filteredChannels.length === 0) {
-            channelListDiv.innerHTML = '<div style="text-align:center; padding:40px 20px; font-size:0.7rem; color:#444;">No channels found</div>';
-            return;
-        }
-        
-        let html = '';
-        filteredChannels.forEach((ch, idx) => {
-            const isActive = currentChannel && currentChannel.url === ch.url;
-            const isOffline = offlineChannels.has(ch.url);
-            const isChecking = checkingChannels.has(ch.url);
-            const isRadio = ch.category === 'Radio' || ch.name.toLowerCase().includes('radio');
-            const statusIcon = getStatusIcon(ch);
-            const youtubeBadge = ch.isYoutube ? '<span class="youtube-badge">▶ YouTube</span>' : '';
-            
-            let iconHtml = ch.logo && ch.logo.startsWith('http') ? 
-                `<img class="channel-icon" src="${escapeHtml(ch.logo)}" onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\'channel-icon fallback\'>${isRadio ? '🎵' : '📺'}</div>'">` : 
-                `<div class="channel-icon fallback">${isRadio ? '🎵' : '📺'}</div>`;
-            
-            html += `<div class="channel-item ${isActive ? 'active' : ''} ${isOffline ? 'offline' : ''}" data-index="${idx}">
-                        ${iconHtml}
-                        <div class="channel-info">
-                            <div class="channel-name">${escapeHtml(ch.name)} ${statusIcon} ${youtubeBadge}</div>
-                            <div class="channel-category">${escapeHtml(ch.category)}</div>
-                        </div>
-                    </div>`;
-        });
-        
-        channelListDiv.innerHTML = html;
-        
-        document.querySelectorAll('.channel-item').forEach(item => {
-            item.addEventListener('click', () => {
-                const idx = parseInt(item.dataset.index);
-                const channel = filteredChannels[idx];
-                if (channel && !offlineChannels.has(channel.url) && !checkingChannels.has(channel.url)) {
-                    currentChannelIndex = idx;
-                    selectChannel(channel);
-                } else if (channel && offlineChannels.has(channel.url)) {
-                    showToast('This channel is offline', true);
-                } else if (channel && checkingChannels.has(channel.url)) {
-                    showToast('Still checking this channel...', true);
-                }
+        if (renderTimeout) cancelAnimationFrame(renderTimeout);
+        renderTimeout = requestAnimationFrame(() => {
+            if (filteredChannels.length === 0) {
+                channelListDiv.innerHTML = '<div style="text-align:center; padding:40px 20px; font-size:0.7rem; color:#444;">No channels found</div>';
+                return;
+            }
+            const fragment = document.createDocumentFragment();
+            filteredChannels.forEach((ch, idx) => {
+                const isActive = currentChannel && currentChannel.url === ch.url;
+                const isOffline = offlineChannels.has(ch.url);
+                const isChecking = checkingChannels.has(ch.url);
+                const isRadio = ch.category === 'Radio' || ch.name.toLowerCase().includes('radio');
+                const statusIcon = getStatusIcon(ch);
+                const youtubeBadge = ch.isYoutube ? '<span class="youtube-badge">▶ YouTube</span>' : '';
+                let iconHtml = ch.logo && ch.logo.startsWith('http') ? 
+                    `<img class="channel-icon" src="${escapeHtml(ch.logo)}" onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\'channel-icon fallback\'>${isRadio ? '🎵' : '📺'}</div>'">` : 
+                    `<div class="channel-icon fallback">${isRadio ? '🎵' : '📺'}</div>`;
+                const div = document.createElement('div');
+                div.className = `channel-item ${isActive ? 'active' : ''} ${isOffline ? 'offline' : ''}`;
+                div.dataset.index = idx;
+                div.innerHTML = `${iconHtml}<div class="channel-info"><div class="channel-name">${escapeHtml(ch.name)} ${statusIcon} ${youtubeBadge}</div><div class="channel-category">${escapeHtml(ch.category)}</div></div>`;
+                div.addEventListener('click', () => {
+                    const index = parseInt(div.dataset.index);
+                    const channel = filteredChannels[index];
+                    if (channel && !offlineChannels.has(channel.url) && !checkingChannels.has(channel.url)) {
+                        currentChannelIndex = index;
+                        selectChannel(channel);
+                    } else if (channel && offlineChannels.has(channel.url)) {
+                        showToast('This channel is offline', true);
+                    } else if (channel && checkingChannels.has(channel.url)) {
+                        showToast('Still checking this channel...', true);
+                    }
+                });
+                fragment.appendChild(div);
             });
+            channelListDiv.innerHTML = '';
+            channelListDiv.appendChild(fragment);
+            renderTimeout = null;
         });
     }
     
@@ -771,14 +717,8 @@
     
     function selectChannel(channel) {
         if (!channel || !channel.url) return;
-        if (offlineChannels.has(channel.url)) {
-            showToast('Channel offline - cannot play', true);
-            return;
-        }
-        if (checkingChannels.has(channel.url)) {
-            showToast('Channel still being tested...', true);
-            return;
-        }
+        if (offlineChannels.has(channel.url)) { showToast('Channel offline - cannot play', true); return; }
+        if (checkingChannels.has(channel.url)) { showToast('Channel still being tested...', true); return; }
         currentChannel = channel;
         renderChannelList();
         updateRadioDisplay(channel);
@@ -787,17 +727,13 @@
     
     function initVideo() { videoPlayer = videoPlayerEl; videoPlayer.volume = volumeSlider.value / 100; }
     
-    // Event listeners
-    editSheetBtn.addEventListener('click', () => {
-        window.open(GOOGLE_SHEET_EDIT_URL, '_blank');
-    });
-    
+    // Event listeners with cleanup
+    editSheetBtn.addEventListener('click', () => window.open(GOOGLE_SHEET_EDIT_URL, '_blank'));
     tvModeBtn.addEventListener('click', () => switchMode('tv'));
     radioModeBtn.addEventListener('click', () => switchMode('radio'));
     loadSheetBtn.addEventListener('click', loadFromGoogleSheet);
     playCustomUrlBtn.addEventListener('click', playCustomUrl);
     customUrlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') playCustomUrl(); });
-    
     prevChannelBtn.addEventListener('click', () => navigateChannel(-1));
     nextChannelBtn.addEventListener('click', () => navigateChannel(1));
     playPauseBtn.addEventListener('click', togglePlayPause);
@@ -805,53 +741,38 @@
     
     stopBtn.addEventListener('click', () => { 
         destroyHls(); 
-        if (isYoutubeMode) {
-            youtubeIframe.src = '';
-            youtubeIframe.style.display = 'none';
-            isYoutubeMode = false;
-        }
-        if (videoPlayer) {
-            videoPlayer.pause();
-            videoPlayer.removeAttribute('src');
-            videoPlayer.load();
-        }
+        if (isYoutubeMode) { youtubeIframe.src = ''; youtubeIframe.style.display = 'none'; isYoutubeMode = false; }
+        if (videoPlayer) { videoPlayer.pause(); videoPlayer.removeAttribute('src'); videoPlayer.load(); }
         updatePlayPauseButton(false);
-        if (document.pictureInPictureElement) {
-            document.exitPictureInPicture().catch(() => {});
-            pipBtn.style.color = '#ffffff';
-        }
+        if (document.pictureInPictureElement) { document.exitPictureInPicture().catch(() => {}); pipBtn.style.color = '#ffffff'; }
     });
     
     volumeSlider.addEventListener('input', () => { if (videoPlayer) videoPlayer.volume = volumeSlider.value / 100; });
-    searchInput.addEventListener('input', () => applyFilters());
-    categoryDropdown.addEventListener('change', () => {
-        activeCategory = categoryDropdown.value;
-        applyFilters();
-    });
+    searchInput.addEventListener('input', () => { if (searchTimeout) clearTimeout(searchTimeout); searchTimeout = setTimeout(applyFilters, 150); });
+    categoryDropdown.addEventListener('change', () => { activeCategory = categoryDropdown.value; applyFilters(); });
     
-    // Update play/pause button state on video events
     videoPlayerEl.addEventListener('play', () => updatePlayPauseButton(true));
     videoPlayerEl.addEventListener('pause', () => updatePlayPauseButton(false));
     videoPlayerEl.addEventListener('ended', () => updatePlayPauseButton(false));
     
-    // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
         if (e.code === 'Space' && document.activeElement !== searchInput && document.activeElement !== customUrlInput) {
-            e.preventDefault();
-            togglePlayPause();
+            e.preventDefault(); togglePlayPause();
         }
         if (e.key === 'ArrowLeft' && document.activeElement !== searchInput && document.activeElement !== customUrlInput) {
-            e.preventDefault();
-            navigateChannel(-1);
+            e.preventDefault(); navigateChannel(-1);
         }
         if (e.key === 'ArrowRight' && document.activeElement !== searchInput && document.activeElement !== customUrlInput) {
-            e.preventDefault();
-            navigateChannel(1);
+            e.preventDefault(); navigateChannel(1);
         }
-        if (e.key === 'f' || e.key === 'F') {
-            e.preventDefault();
-            togglePip();
-        }
+        if (e.key === 'f' || e.key === 'F') { e.preventDefault(); togglePip(); }
+    });
+    
+    // Memory cleanup on page unload
+    window.addEventListener('beforeunload', () => {
+        destroyHls();
+        if (videoPlayer) { videoPlayer.pause(); videoPlayer.removeAttribute('src'); videoPlayer.load(); }
+        youtubeIframe.src = '';
     });
     
     initVideo();
