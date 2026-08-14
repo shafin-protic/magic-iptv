@@ -62,13 +62,32 @@
         .channel-icon { width: 40px; height: 40px; border-radius: 8px; object-fit: cover; background: #0a0a0a; flex-shrink: 0; }
         .channel-icon.fallback { display: flex; align-items: center; justify-content: center; font-size: 1.2rem; background: #0a0a0a; }
         .channel-info { flex: 1; min-width: 0; }
-        .channel-name { font-size: 0.8rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #e0e0e0; }
+        .channel-name { font-size: 0.8rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #e0e0e0; display: flex; align-items: center; gap: 6px; }
         .channel-category { font-size: 0.6rem; color: #666; margin-top: 2px; }
-        .status-icon { font-size: 0.7rem; margin-left: 5px; }
+        .status-icon { font-size: 0.7rem; margin-left: 0; flex-shrink: 0; }
         .status-online { color: #2eff8c; }
         .status-offline { color: #ff5e5e; }
         .status-checking { color: #ff9800; }
-        .youtube-badge { font-size: 0.5rem; background: #ff0000; padding: 1px 6px; border-radius: 4px; color: #fff; margin-left: 4px; }
+        .youtube-badge { 
+            font-size: 0.6rem; 
+            background: transparent; 
+            padding: 0 2px; 
+            border-radius: 4px; 
+            color: #ff0000; 
+            margin-left: 0px; 
+            display: inline-flex; 
+            align-items: center; 
+            justify-content: center; 
+            line-height: 1;
+            font-weight: 400;
+            letter-spacing: 0;
+        }
+        .youtube-badge svg {
+            width: 16px;
+            height: 16px;
+            fill: #ff0000;
+            display: block;
+        }
         
         .player-area { flex: 1; display: flex; flex-direction: column; background: #000000; min-width: 0; overflow: hidden; }
         .video-container { flex: 1; background: #000000; position: relative; display: flex; align-items: center; justify-content: center; min-height: 0; overflow: hidden; }
@@ -196,7 +215,6 @@
     const GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTESN5TIXBEckCTwsoNEyMtecwRRkQoQwMI-09RPuz7kjwz-jPROLsNdfmRY0Q0aYFfeLgIQrFXbRZK/pub?gid=1947259241&single=true&output=csv";
     const GOOGLE_SHEET_EDIT_URL = "https://docs.google.com/spreadsheets/d/1lkZLaaxRjtJbwD_NhFQh6r7Hr_sxPnQGKiWKsu80cYI/edit?usp=sharing";
     
-    // Memory optimization: Reuse objects, minimize closures
     let channels = [];
     let filteredChannels = [];
     let currentChannel = null;
@@ -215,7 +233,7 @@
     let renderTimeout = null;
     let searchTimeout = null;
     
-    // DOM cache - store references
+    // DOM cache
     const channelListDiv = document.getElementById('channelList');
     const searchInput = document.getElementById('searchInput');
     const categoryDropdown = document.getElementById('categoryDropdown');
@@ -243,7 +261,6 @@
     const playCustomUrlBtn = document.getElementById('playCustomUrlBtn');
     const videoPlayerEl = document.getElementById('videoPlayer');
     
-    // Toast manager - single instance
     let toastTimeout = null;
     function showToast(message, isError = false) {
         if (toastTimeout) clearTimeout(toastTimeout);
@@ -303,7 +320,6 @@
         radioCategory.textContent = channel.category;
     }
     
-    // Inline isYouTubeUrl - avoid function call overhead
     function isYouTubeUrl(url) {
         return url && (url.includes('youtube.com/watch') || url.includes('youtu.be/') || url.includes('youtube.com/live'));
     }
@@ -314,63 +330,48 @@
         return match ? match[1] : null;
     }
     
-    // FIXED: Properly clean up before playing YouTube
     function playYoutube(url, channelName = 'YouTube Live') {
         const videoId = getYoutubeId(url);
         if (!videoId) {
             showToast('Invalid YouTube URL', true);
             return;
         }
-        
-        // CRITICAL FIX: Stop and destroy any existing stream
         destroyHls();
         if (videoPlayer) {
             videoPlayer.pause();
             videoPlayer.removeAttribute('src');
             videoPlayer.load();
         }
-        
         isYoutubeMode = true;
         currentYoutubeUrl = url;
-        
-        // Hide video player, show iframe
         videoPlayerEl.style.display = 'none';
         youtubeIframe.style.display = 'block';
         youtubeIframe.src = `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0&enablejsapi=1`;
-        
-        // Update UI
         radioStationName.textContent = channelName;
         radioCategory.textContent = 'YouTube Live';
         showToast(`Playing: ${channelName}`, false);
         updatePlayPauseButton(true);
-        
         if (currentChannel) {
             currentChannel.isYoutube = true;
         }
     }
     
-    // FIXED: Properly clean up before switching to stream
     function playStream(url, channelName) {
-        // CRITICAL FIX: Properly clean up before switching
         destroyHls();
         if (videoPlayer) {
             videoPlayer.pause();
             videoPlayer.removeAttribute('src');
             videoPlayer.load();
         }
-        
-        // Hide YouTube iframe
         youtubeIframe.style.display = 'none';
         youtubeIframe.src = '';
         videoPlayerEl.style.display = 'block';
         isYoutubeMode = false;
         
-        // Check if it's a YouTube URL
         if (isYouTubeUrl(url)) {
             playYoutube(url, channelName);
             return;
         }
-        
         showLoading(true);
         const video = videoPlayerEl;
         if (currentMode === 'radio') { 
@@ -379,7 +380,6 @@
         } else { 
             video.style.display = 'block'; 
         }
-        
         video.pause();
         video.removeAttribute('src');
         video.load();
@@ -525,11 +525,11 @@
         isPipMode = false;
     });
     
-    // Optimized test function with timeout
+    // Fast stream test with timeout
     function testStreamReal(url) {
         if (isYouTubeUrl(url)) return Promise.resolve(true);
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        const timeoutId = setTimeout(() => controller.abort(), 3000);
         return new Promise((resolve) => {
             try {
                 if (url.includes('.m3u8')) {
@@ -565,19 +565,25 @@
         });
     }
     
-    // Progressive testing with smaller batches for memory efficiency
+    // Progressive testing with small batches, but we mark YouTube as online instantly
     async function testChannelsProgressive(channelArray) {
         if (testingActive) return;
         testingActive = true;
         const total = channelArray.length;
         let tested = 0, onlineCount = 0;
+        
+        // Mark YouTube channels as online immediately
         channelArray.forEach(ch => {
-            if (isYouTubeUrl(ch.url)) { onlineCount++; tested++; } 
-            else checkingChannels.add(ch.url);
+            if (isYouTubeUrl(ch.url)) {
+                onlineCount++;
+                tested++;
+            } else {
+                checkingChannels.add(ch.url);
+            }
         });
         updateStatusBar();
         testingStatusDiv.innerHTML = `🔍 Testing 0/${total}`;
-        const batchSize = 2; // Smaller batch for memory
+        const batchSize = 3; 
         for (let i = 0; i < channelArray.length; i += batchSize) {
             const batch = channelArray.slice(i, i + batchSize);
             const results = await Promise.all(batch.map(ch => {
@@ -595,7 +601,7 @@
             updateStatusBar();
             populateCategoryDropdown();
             applyFilters();
-            await new Promise(r => setTimeout(r, 50));
+            await new Promise(r => setTimeout(r, 30));
         }
         testingStatusDiv.innerHTML = `✅ Complete: ${onlineCount} online, ${total - onlineCount} offline`;
         updateStatusBar();
@@ -648,12 +654,19 @@
                 }
                 if (parsedChannels.length > 0) {
                     channels = parsedChannels;
+                    // Mark YouTube as online instantly so they appear green and playable
+                    channels.forEach(ch => {
+                        if (ch.isYoutube) {
+                            // do not add to offline or checking
+                        }
+                    });
                     filteredChannels = [...channels];
                     populateCategoryDropdown();
                     renderChannelList();
                     showToast(`Loaded ${channels.length} channels! Testing...`);
                     updateStatusBar();
-                    await testChannelsProgressive(channels);
+                    // Run test in background, but UI is already responsive
+                    testChannelsProgressive(channels);
                 } else throw new Error('No valid channels');
             } else throw new Error(`HTTP ${response.status}`);
         } catch (error) {
@@ -707,7 +720,10 @@
         return '<span class="status-icon status-online">🟢</span>';
     }
     
-    // Optimized render with DocumentFragment
+    function getYoutubeBadge() {
+        return `<span class="youtube-badge"><svg viewBox="0 0 24 24" width="16" height="16"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg></span>`;
+    }
+    
     function renderChannelList() {
         if (renderTimeout) cancelAnimationFrame(renderTimeout);
         renderTimeout = requestAnimationFrame(() => {
@@ -722,7 +738,7 @@
                 const isChecking = checkingChannels.has(ch.url);
                 const isRadio = ch.category === 'Radio' || ch.name.toLowerCase().includes('radio');
                 const statusIcon = getStatusIcon(ch);
-                const youtubeBadge = ch.isYoutube ? '<span class="youtube-badge">▶ YouTube</span>' : '';
+                const youtubeBadge = ch.isYoutube ? getYoutubeBadge() : '';
                 let iconHtml = ch.logo && ch.logo.startsWith('http') ? 
                     `<img class="channel-icon" src="${escapeHtml(ch.logo)}" onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\'channel-icon fallback\'>${isRadio ? '🎵' : '📺'}</div>'">` : 
                     `<div class="channel-icon fallback">${isRadio ? '🎵' : '📺'}</div>`;
@@ -764,7 +780,7 @@
     
     function initVideo() { videoPlayer = videoPlayerEl; videoPlayer.volume = volumeSlider.value / 100; }
     
-    // Event listeners with cleanup
+    // Event listeners
     editSheetBtn.addEventListener('click', () => window.open(GOOGLE_SHEET_EDIT_URL, '_blank'));
     tvModeBtn.addEventListener('click', () => switchMode('tv'));
     radioModeBtn.addEventListener('click', () => switchMode('radio'));
@@ -805,7 +821,6 @@
         if (e.key === 'f' || e.key === 'F') { e.preventDefault(); togglePip(); }
     });
     
-    // Memory cleanup on page unload
     window.addEventListener('beforeunload', () => {
         destroyHls();
         if (videoPlayer) { videoPlayer.pause(); videoPlayer.removeAttribute('src'); videoPlayer.load(); }
@@ -813,7 +828,8 @@
     });
     
     initVideo();
-    setTimeout(() => loadFromGoogleSheet(), 500);
+    // Load sheet faster: start immediately with a small delay to allow UI to render
+    setTimeout(() => loadFromGoogleSheet(), 100);
 </script>
 </body>
 </html>
