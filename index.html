@@ -88,15 +88,6 @@
             fill: #ff0000;
             display: block;
         }
-        .playlist-badge {
-            font-size: 0.5rem;
-            background: #1a1a1a;
-            padding: 1px 6px;
-            border-radius: 4px;
-            color: #ff9800;
-            margin-left: 4px;
-            border: 1px solid #2a2a2a;
-        }
         
         .player-area { flex: 1; display: flex; flex-direction: column; background: #000000; min-width: 0; overflow: hidden; }
         .video-container { flex: 1; background: #000000; position: relative; display: flex; align-items: center; justify-content: center; min-height: 0; overflow: hidden; }
@@ -175,7 +166,7 @@
         </div>
         <div class="header-right">
             <div class="url-input-bar">
-                <input type="text" id="customUrlInput" placeholder="YouTube / Playlist / IPTV link..." />
+                <input type="text" id="customUrlInput" placeholder="YouTube or IPTV link..." />
                 <button id="playCustomUrlBtn">▶ Play</button>
             </div>
             <div class="status-bar" id="statusBar">
@@ -242,11 +233,6 @@
     let renderTimeout = null;
     let searchTimeout = null;
     
-    // Playlist state
-    let playlistVideoIds = [];
-    let isPlaylistMode = false;
-    let playlistName = '';
-    
     // DOM cache
     const channelListDiv = document.getElementById('channelList');
     const searchInput = document.getElementById('searchInput');
@@ -287,7 +273,7 @@
         toast.textContent = message;
         toast.style.background = isError ? '#1a1a1a' : '#1a1a1a';
         toast.style.display = 'block';
-        toastTimeout = setTimeout(() => { toast.style.display = 'none'; }, 3500);
+        toastTimeout = setTimeout(() => { toast.style.display = 'none'; }, 2500);
     }
     
     function showLoading(show) { loadingOverlay.style.display = show ? 'block' : 'none'; }
@@ -331,143 +317,17 @@
     
     function updateRadioDisplay(channel) {
         radioStationName.textContent = channel.name;
-        radioCategory.textContent = channel.category || (isPlaylistMode ? '🎲 Playlist' : '');
+        radioCategory.textContent = channel.category;
     }
     
     function isYouTubeUrl(url) {
         return url && (url.includes('youtube.com/watch') || url.includes('youtu.be/') || url.includes('youtube.com/live'));
     }
     
-    function isPlaylistUrl(url) {
-        return url && (url.includes('youtube.com/playlist') || url.includes('youtube.com/watch?v=') && url.includes('list='));
-    }
-    
     function getYoutubeId(url) {
         const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
         const match = url.match(regex);
         return match ? match[1] : null;
-    }
-    
-    function extractPlaylistId(url) {
-        const match = url.match(/[&?]list=([^&]+)/);
-        return match ? match[1] : null;
-    }
-    
-    // Fetch playlist videos using free CORS proxy
-    async function fetchPlaylistVideos(playlistId) {
-        try {
-            // Try direct fetch first (sometimes works)
-            const url = `https://www.youtube.com/playlist?list=${playlistId}`;
-            let response = await fetch(url, {
-                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
-            });
-            
-            // If direct fails, use CORS proxy
-            if (!response.ok) {
-                const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
-                response = await fetch(proxyUrl);
-                if (!response.ok) {
-                    // Try alternative proxy
-                    const proxy2 = `https://corsproxy.io/?${encodeURIComponent(url)}`;
-                    response = await fetch(proxy2);
-                }
-            }
-            
-            if (!response.ok) throw new Error('Failed to fetch playlist');
-            
-            const html = await response.text();
-            // Extract video IDs from playlist page
-            const videoIds = [];
-            // Method 1: Find video IDs in the initial data
-            const regex1 = /"videoId":"([^"]{11})"/g;
-            let match;
-            while ((match = regex1.exec(html)) !== null) {
-                if (!videoIds.includes(match[1])) {
-                    videoIds.push(match[1]);
-                }
-            }
-            
-            // Method 2: Fallback - find /watch?v= links
-            if (videoIds.length === 0) {
-                const regex2 = /\/watch\?v=([^"&?\/\s]{11})/g;
-                while ((match = regex2.exec(html)) !== null) {
-                    if (!videoIds.includes(match[1])) {
-                        videoIds.push(match[1]);
-                    }
-                }
-            }
-            
-            // Extract playlist title
-            let title = 'YouTube Playlist';
-            const titleMatch = html.match(/<title>(.*?)<\/title>/);
-            if (titleMatch) {
-                title = titleMatch[1].replace(' - YouTube', '').trim();
-            }
-            
-            return { videoIds, title };
-        } catch (error) {
-            console.error('Error fetching playlist:', error);
-            throw error;
-        }
-    }
-    
-    function playRandomFromPlaylist() {
-        if (playlistVideoIds.length === 0) {
-            showToast('Playlist is empty', true);
-            return;
-        }
-        const randomIndex = Math.floor(Math.random() * playlistVideoIds.length);
-        const videoId = playlistVideoIds[randomIndex];
-        const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
-        playYoutube(youtubeUrl, `${playlistName} 🎲 #${randomIndex + 1}`);
-    }
-    
-    async function handlePlaylist(url) {
-        const playlistId = extractPlaylistId(url);
-        if (!playlistId) {
-            showToast('Invalid playlist URL', true);
-            return;
-        }
-        
-        showLoading(true);
-        showToast('Fetching playlist...');
-        
-        try {
-            const result = await fetchPlaylistVideos(playlistId);
-            if (result.videoIds.length === 0) {
-                showToast('No videos found in playlist', true);
-                showLoading(false);
-                return;
-            }
-            
-            playlistVideoIds = result.videoIds;
-            playlistName = result.title || 'YouTube Playlist';
-            isPlaylistMode = true;
-            
-            showToast(`Loaded ${playlistVideoIds.length} videos from playlist`, false);
-            
-            // Create a virtual channel for the playlist
-            const playlistChannel = {
-                name: `${playlistName} 🎲`,
-                url: url,
-                category: 'Playlist',
-                logo: '',
-                isYoutube: true,
-                isPlaylist: true
-            };
-            
-            currentChannel = playlistChannel;
-            currentChannelIndex = -1;
-            renderChannelList();
-            
-            // Play a random video
-            playRandomFromPlaylist();
-            showLoading(false);
-            
-        } catch (error) {
-            showToast('Failed to load playlist: ' + error.message, true);
-            showLoading(false);
-        }
     }
     
     function playYoutube(url, channelName = 'YouTube Live') {
@@ -488,7 +348,7 @@
         youtubeIframe.style.display = 'block';
         youtubeIframe.src = `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0&enablejsapi=1`;
         radioStationName.textContent = channelName;
-        radioCategory.textContent = isPlaylistMode ? '🎲 Playlist' : 'YouTube Live';
+        radioCategory.textContent = 'YouTube Live';
         showToast(`Playing: ${channelName}`, false);
         updatePlayPauseButton(true);
         if (currentChannel) {
@@ -497,18 +357,6 @@
     }
     
     function playStream(url, channelName) {
-        // Check if it's a playlist
-        if (isPlaylistUrl(url) && !url.includes('/watch?v=')) {
-            handlePlaylist(url);
-            return;
-        }
-        
-        // If we're in playlist mode and this is a single video, handle it
-        if (isPlaylistMode && isYouTubeUrl(url)) {
-            playYoutube(url, channelName);
-            return;
-        }
-        
         destroyHls();
         if (videoPlayer) {
             videoPlayer.pause();
@@ -583,11 +431,6 @@
     }
     
     function navigateChannel(direction) {
-        if (isPlaylistMode) {
-            // In playlist mode, just play a random video from the playlist
-            playRandomFromPlaylist();
-            return;
-        }
         if (filteredChannels.length === 0) return;
         let newIndex = currentChannelIndex + direction;
         if (newIndex < 0) newIndex = filteredChannels.length - 1;
@@ -615,26 +458,7 @@
     function playCustomUrl() {
         const url = customUrlInput.value.trim();
         if (!url) { showToast('Please enter a URL', true); return; }
-        
-        // Check if it's a playlist URL
-        if (isPlaylistUrl(url)) {
-            // Reset playlist mode if switching
-            if (!isPlaylistMode) {
-                playlistVideoIds = [];
-                isPlaylistMode = false;
-            }
-            handlePlaylist(url);
-            return;
-        }
-        
-        // Reset playlist mode for single video/stream
-        isPlaylistMode = false;
-        playlistVideoIds = [];
-        
-        if (isYouTubeUrl(url)) { 
-            playYoutube(url, 'Custom YouTube'); 
-            return; 
-        }
+        if (isYouTubeUrl(url)) { playYoutube(url, 'Custom YouTube'); return; }
         const fakeChannel = { name: 'Custom Stream', url: url, category: 'Custom', logo: '' };
         currentChannel = fakeChannel;
         currentChannelIndex = -1;
@@ -701,6 +525,7 @@
         isPipMode = false;
     });
     
+    // Fast stream test with timeout
     function testStreamReal(url) {
         if (isYouTubeUrl(url)) return Promise.resolve(true);
         const controller = new AbortController();
@@ -740,12 +565,14 @@
         });
     }
     
+    // Progressive testing with small batches, but we mark YouTube as online instantly
     async function testChannelsProgressive(channelArray) {
         if (testingActive) return;
         testingActive = true;
         const total = channelArray.length;
         let tested = 0, onlineCount = 0;
         
+        // Mark YouTube channels as online immediately
         channelArray.forEach(ch => {
             if (isYouTubeUrl(ch.url)) {
                 onlineCount++;
@@ -827,11 +654,18 @@
                 }
                 if (parsedChannels.length > 0) {
                     channels = parsedChannels;
+                    // Mark YouTube as online instantly so they appear green and playable
+                    channels.forEach(ch => {
+                        if (ch.isYoutube) {
+                            // do not add to offline or checking
+                        }
+                    });
                     filteredChannels = [...channels];
                     populateCategoryDropdown();
                     renderChannelList();
                     showToast(`Loaded ${channels.length} channels! Testing...`);
                     updateStatusBar();
+                    // Run test in background, but UI is already responsive
                     testChannelsProgressive(channels);
                 } else throw new Error('No valid channels');
             } else throw new Error(`HTTP ${response.status}`);
@@ -893,30 +727,13 @@
     function renderChannelList() {
         if (renderTimeout) cancelAnimationFrame(renderTimeout);
         renderTimeout = requestAnimationFrame(() => {
-            if (filteredChannels.length === 0 && !isPlaylistMode) {
+            if (filteredChannels.length === 0) {
                 channelListDiv.innerHTML = '<div style="text-align:center; padding:40px 20px; font-size:0.7rem; color:#444;">No channels found</div>';
                 return;
             }
             const fragment = document.createDocumentFragment();
-            
-            // Show playlist channel if in playlist mode
-            if (isPlaylistMode && currentChannel) {
-                const ch = currentChannel;
-                const isActive = true;
-                const statusIcon = '<span class="status-icon status-online">🟢</span>';
-                const youtubeBadge = getYoutubeBadge() + '<span class="playlist-badge">🎲 Playlist</span>';
-                let iconHtml = `<div class="channel-icon fallback">📋</div>`;
-                const div = document.createElement('div');
-                div.className = `channel-item active`;
-                div.innerHTML = `${iconHtml}<div class="channel-info"><div class="channel-name">${escapeHtml(ch.name)} ${statusIcon} ${youtubeBadge}</div><div class="channel-category">🎲 ${playlistVideoIds.length} videos</div></div>`;
-                div.addEventListener('click', () => {
-                    playRandomFromPlaylist();
-                });
-                fragment.appendChild(div);
-            }
-            
             filteredChannels.forEach((ch, idx) => {
-                const isActive = currentChannel && currentChannel.url === ch.url && !isPlaylistMode;
+                const isActive = currentChannel && currentChannel.url === ch.url;
                 const isOffline = offlineChannels.has(ch.url);
                 const isChecking = checkingChannels.has(ch.url);
                 const isRadio = ch.category === 'Radio' || ch.name.toLowerCase().includes('radio');
@@ -930,11 +747,6 @@
                 div.dataset.index = idx;
                 div.innerHTML = `${iconHtml}<div class="channel-info"><div class="channel-name">${escapeHtml(ch.name)} ${statusIcon} ${youtubeBadge}</div><div class="channel-category">${escapeHtml(ch.category)}</div></div>`;
                 div.addEventListener('click', () => {
-                    if (isPlaylistMode) {
-                        // If in playlist mode, switching to a regular channel exits playlist mode
-                        isPlaylistMode = false;
-                        playlistVideoIds = [];
-                    }
                     const index = parseInt(div.dataset.index);
                     const channel = filteredChannels[index];
                     if (channel && !offlineChannels.has(channel.url) && !checkingChannels.has(channel.url)) {
@@ -986,12 +798,6 @@
         if (videoPlayer) { videoPlayer.pause(); videoPlayer.removeAttribute('src'); videoPlayer.load(); }
         updatePlayPauseButton(false);
         if (document.pictureInPictureElement) { document.exitPictureInPicture().catch(() => {}); pipBtn.style.color = '#ffffff'; }
-        // Reset playlist mode if stopped manually
-        if (isPlaylistMode) {
-            isPlaylistMode = false;
-            playlistVideoIds = [];
-            renderChannelList();
-        }
     });
     
     volumeSlider.addEventListener('input', () => { if (videoPlayer) videoPlayer.volume = volumeSlider.value / 100; });
@@ -1000,15 +806,7 @@
     
     videoPlayerEl.addEventListener('play', () => updatePlayPauseButton(true));
     videoPlayerEl.addEventListener('pause', () => updatePlayPauseButton(false));
-    videoPlayerEl.addEventListener('ended', () => {
-        updatePlayPauseButton(false);
-        // If in playlist mode, play next random video
-        if (isPlaylistMode && playlistVideoIds.length > 0) {
-            setTimeout(() => {
-                playRandomFromPlaylist();
-            }, 1000);
-        }
-    });
+    videoPlayerEl.addEventListener('ended', () => updatePlayPauseButton(false));
     
     document.addEventListener('keydown', (e) => {
         if (e.code === 'Space' && document.activeElement !== searchInput && document.activeElement !== customUrlInput) {
@@ -1030,6 +828,7 @@
     });
     
     initVideo();
+    // Load sheet faster: start immediately with a small delay to allow UI to render
     setTimeout(() => loadFromGoogleSheet(), 100);
 </script>
 </body>
